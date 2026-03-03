@@ -1,0 +1,305 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. Core Parameterization & Lookup Tables
+// ==========================================
+
+model SystemParameter {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  category  String
+  label     String
+  value     String
+  color     String?
+  isActive  Boolean  @default(true) @map("is_active")
+
+  // Relationships
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tasksType Task[]   @relation("TaskType")
+  tasksPrio Task[]   @relation("TaskPriority")
+
+  @@map("system_parameters")
+}
+
+model WorkflowState {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  category  String   // TODO, IN_PROGRESS, DONE
+  color     String?
+  orderIdx  Int?     @map("order_idx")
+
+  // Relationships
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tasks     Task[]
+
+  @@map("workflow_states")
+}
+
+model CustomFieldDefinition {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  projectId  String?  @map("project_id") @db.Uuid
+  name       String
+  fieldKey   String   @map("field_key")
+  type       String   // text, number, date, dropdown, user
+  isRequired Boolean  @default(false) @map("is_required")
+
+  // Relationships
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  project    Project? @relation(fields: [projectId], references: [id])
+
+  @@unique([tenantId, projectId, fieldKey])
+  @@map("custom_field_definitions")
+}
+
+// ==========================================
+// 2. Tenant & Master Data
+// ==========================================
+
+model Tenant {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  domain    String?  @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  users                  User[]
+  portfolios             Portfolio[]
+  projects               Project[]
+  tasks                  Task[]
+  meetings               Meeting[]
+  systemParameters       SystemParameter[]
+  workflowStates         WorkflowState[]
+  customFieldDefinitions CustomFieldDefinition[]
+  roles                  Role[]
+  activityLogs           ActivityLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  name           String
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  projectMembers ProjectMember[]
+  assignedTasks  Task[]   @relation("TaskAssignee")
+  reportedTasks  Task[]   @relation("TaskReporter")
+  meetingInvites MeetingAttendee[]
+  activityLogs   ActivityLog[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  name        String
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+
+  // Relationships
+  tenant          Tenant            @relation(fields: [tenantId], references: [id])
+  permissions     RolePermission[]
+  projectMembers  ProjectMember[]
+
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId         String @map("role_id") @db.Uuid
+  permissionCode String @map("permission_code")
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([roleId, permissionCode])
+  @@map("role_permissions")
+}
+
+// ==========================================
+// 3. Project & Portfolio
+// ==========================================
+
+model Portfolio {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  name        String
+  description String?
+  ownerId     String?  @map("owner_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  projects Project[]
+
+  @@map("portfolios")
+}
+
+model Project {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  portfolioId String?  @map("portfolio_id") @db.Uuid
+  name        String
+  key         String   @unique
+  description String?
+  status      String   // Planning, Active, Completed, OnHold
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id])
+  portfolio              Portfolio?              @relation(fields: [portfolioId], references: [id])
+  members                ProjectMember[]
+  tasks                  Task[]
+  meetings               Meeting[]
+  customFieldDefinitions CustomFieldDefinition[]
+
+  @@map("projects")
+}
+
+model ProjectMember {
+  projectId String   @map("project_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  joinedAt  DateTime @default(now()) @map("joined_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+  role    Role    @relation(fields: [roleId], references: [id])
+
+  @@id([projectId, userId])
+  @@map("project_members")
+}
+
+// ==========================================
+// 4. Tasks (The Engine)
+// ==========================================
+
+model Task {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  projectId    String    @map("project_id") @db.Uuid
+  title        String
+  issueKey     String    @unique @map("issue_key")
+  description  String?
+  typeId       String?   @map("type_id") @db.Uuid
+  priorityId   String?   @map("priority_id") @db.Uuid
+  stateId      String    @map("state_id") @db.Uuid
+  assigneeId   String?   @map("assignee_id") @db.Uuid
+  reporterId   String    @map("reporter_id") @db.Uuid
+  dueDate      DateTime? @map("due_date") @db.Date
+  weight       Int       @default(1)
+  parentTaskId String?   @map("parent_task_id") @db.Uuid
+  customData   Json?     @default("{}") @map("custom_data")
+  version      Int       @default(1)
+  deletedAt    DateTime? @map("deleted_at")
+
+  // Relationships
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  project        Project          @relation(fields: [projectId], references: [id])
+  type           SystemParameter? @relation("TaskType", fields: [typeId], references: [id])
+  priority       SystemParameter? @relation("TaskPriority", fields: [priorityId], references: [id])
+  state          WorkflowState    @relation(fields: [stateId], references: [id])
+  assignee       User?            @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reporter       User             @relation("TaskReporter", fields: [reporterId], references: [id])
+  parentTask     Task?            @relation("SubTasks", fields: [parentTaskId], references: [id])
+  subTasks       Task[]           @relation("SubTasks")
+  sourceLinks    TaskLink[]       @relation("SourceLinks")
+  targetLinks    TaskLink[]       @relation("TargetLinks")
+  meetings       Meeting[]
+  activityLogs   ActivityLog[]
+  comments       TaskComment[]
+
+  @@map("tasks")
+}
+
+model TaskLink {
+  sourceTaskId String @map("source_task_id") @db.Uuid
+  targetTaskId String @map("target_task_id") @db.Uuid
+  linkType     String @map("link_type")
+
+  sourceTask Task @relation("SourceLinks", fields: [sourceTaskId], references: [id])
+  targetTask Task @relation("TargetLinks", fields: [targetTaskId], references: [id])
+
+  @@id([sourceTaskId, targetTaskId])
+  @@map("task_links")
+}
+
+model TaskComment {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  content   String   // Rich Text or Markdown
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id])
+  
+  @@map("task_comments")
+}
+
+model ActivityLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  action    String
+  oldValue  Json?    @map("old_value")
+  newValue  Json?    @map("new_value")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  task   Task   @relation(fields: [taskId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@map("activity_logs")
+}
+
+// ==========================================
+// 5. Calendar & Meetings
+// ==========================================
+
+model Meeting {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  title           String
+  description     String?
+  linkedProjectId String?  @map("linked_project_id") @db.Uuid
+  linkedTaskId    String?  @map("linked_task_id") @db.Uuid
+  startTime       DateTime @map("start_time")
+  endTime         DateTime @map("end_time")
+  location        String?
+  meetingUrl      String?  @map("meeting_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id])
+  linkedProject Project?          @relation(fields: [linkedProjectId], references: [id])
+  linkedTask    Task?             @relation(fields: [linkedTaskId], references: [id])
+  attendees     MeetingAttendee[]
+
+  @@map("meetings")
+}
+
+model MeetingAttendee {
+  meetingId  String   @map("meeting_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  rsvpStatus String   @default("pending") @map("rsvp_status") // pending, accepted, declined, tentative
+  invitedAt  DateTime @default(now()) @map("invited_at")
+
+  meeting Meeting @relation(fields: [meetingId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@id([meetingId, userId])
+  @@map("meeting_attendees")
+}

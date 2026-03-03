@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const workflow_controller_1 = require("../controllers/workflow.controller");
+const auth_1 = require("../middlewares/auth");
+// import { requirePermission } from '../middlewares/rbac';
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticate);
+router.get('/', workflow_controller_1.getWorkflows);
+// router.post('/', requirePermission('workflow:manage'), createWorkflow);
+router.post('/', workflow_controller_1.createWorkflow);
+exports.default = router;

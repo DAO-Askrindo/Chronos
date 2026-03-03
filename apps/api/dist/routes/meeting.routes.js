@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const meeting_controller_1 = require("../controllers/meeting.controller");
+const auth_1 = require("../middlewares/auth");
+const router = (0, express_1.Router)();
+router.use(auth_1.authenticate);
+router.get('/', meeting_controller_1.getMeetings);
+router.post('/', meeting_controller_1.createMeeting);
+router.patch('/:id/rsvp', meeting_controller_1.updateRSVP);
+exports.default = router;
